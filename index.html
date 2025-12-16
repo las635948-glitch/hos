@@ -1,10 +1,9 @@
-
 <!DOCTYPE html>
 <html lang="id">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MiniHost Pro</title>
+    <title>MiniHost Pro - GitHub Edition</title>
     
     <!-- Library Penting -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -17,8 +16,8 @@
     <style>
         [v-cloak] { display: none !important; }
         body { background-color: #0f172a; color: #e2e8f0; font-family: 'Segoe UI', sans-serif; }
-        .loading-view { height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; background: #0f172a; color: white; }
         
+        /* Style untuk Code Editor */
         textarea.code-editor {
             font-family: 'Courier New', Courier, monospace;
             white-space: pre;
@@ -32,70 +31,62 @@
 </head>
 <body>
 
-    <!-- ========================================== -->
-    <!-- 1. VIEWER MODE (DENGAN LOGIKA HASH /#/) -->
-    <!-- ========================================== -->
+    <!-- ================================================================= -->
+    <!-- 1. VIEWER MODE (IFRAME FULLSCREEN - SOLUSI TERBAIK UNTUK HASH) -->
+    <!-- ================================================================= -->
     <script>
         // KONFIGURASI SUPABASE
         const SB_URL = 'https://wmhhrcgvnfjsgeideyut.supabase.co';
         const SB_BUCKET = 'hosting';
 
-        // Mendeteksi URL dengan format: domain.com/#/user/project/index.html
-        let viewPath = null;
-        if (window.location.hash && window.location.hash.startsWith('#/')) {
-            // Mengambil string setelah '#/'
-            viewPath = window.location.hash.substring(2);
-        }
-        
-        if (viewPath) {
-            // Tampilan Loading
-            document.body.innerHTML = `
-                <div class="loading-view">
-                    <i class="fa-solid fa-circle-notch fa-spin" style="font-size:3rem;margin-bottom:20px;color:#3b82f6;"></i>
-                    <h3>Memuat Website...</h3>
-                </div>`;
-            
-            // Link File Asli
-            const fullFileUrl = `${SB_URL}/storage/v1/object/public/${SB_BUCKET}/${viewPath}`;
-            const baseUrl = fullFileUrl.substring(0, fullFileUrl.lastIndexOf('/') + 1);
-
-            fetch(fullFileUrl)
-                .then(response => {
-                    if (!response.ok) throw new Error("File tidak ditemukan (404)");
-                    return response.text();
-                })
-                .then(html => {
-                    // Inject <base> tag agar aset relatif terbaca
-                    let modifiedHtml = html;
-                    const baseTag = `<base href="${baseUrl}">`;
-
-                    if (modifiedHtml.includes('<head>')) {
-                        modifiedHtml = modifiedHtml.replace('<head>', `<head>${baseTag}`);
-                    } else if (modifiedHtml.includes('<html>')) {
-                        modifiedHtml = modifiedHtml.replace('<html>', `<html><head>${baseTag}</head>`);
-                    } else {
-                        modifiedHtml = `<head>${baseTag}</head>` + modifiedHtml;
-                    }
-
-                    document.open();
-                    document.write(modifiedHtml);
-                    document.close();
-                })
-                .catch(err => {
-                    document.body.innerHTML = `
-                        <div style="text-align:center;padding:50px;color:#ef4444;font-family:sans-serif;background:#1e293b;height:100vh;">
-                            <h2 style="font-size:2rem;margin-bottom:10px;">Gagal Memuat</h2>
-                            <p style="color:#94a3b8;">${err.message}</p>
-                            <a href="/" style="display:inline-block;margin-top:20px;color:#3b82f6;text-decoration:none;border:1px solid #3b82f6;padding:10px 20px;border-radius:5px;">Kembali ke Dashboard</a>
-                        </div>`;
-                });
+        // Fungsi Cek Hash URL (Format: domain.com/#/user/project/index.html)
+        function checkViewerMode() {
+            if (window.location.hash && window.location.hash.startsWith('#/')) {
+                const path = window.location.hash.substring(2); // Hapus karakter #/
                 
-            throw new Error("Mode Viewer Aktif - Stop Dashboard"); 
+                // Link Asli ke File Supabase (Agar CSS/JS/Gambar terbaca relatif terhadap ini)
+                const targetUrl = `${SB_URL}/storage/v1/object/public/${SB_BUCKET}/${path}`;
+
+                // Render Iframe Full Screen menimpa body
+                document.body.innerHTML = `
+                    <style>
+                        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
+                        #site-frame { width: 100vw; height: 100vh; border: none; display: block; }
+                        #back-btn {
+                            position: fixed; bottom: 20px; right: 20px;
+                            background: rgba(15, 23, 42, 0.9); color: white;
+                            padding: 10px 20px; border-radius: 50px;
+                            text-decoration: none; font-family: sans-serif;
+                            font-size: 14px; z-index: 9999; border: 1px solid #3b82f6;
+                            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+                            transition: 0.3s; display: flex; align-items: center; gap: 8px;
+                        }
+                        #back-btn:hover { background: #2563eb; transform: scale(1.05); }
+                    </style>
+                    
+                    <iframe id="site-frame" src="${targetUrl}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+                    
+                    <a href="/" id="back-btn" onclick="window.location.hash=''; window.location.reload(); return false;">
+                        <i class="fa-solid fa-arrow-left"></i> Dashboard
+                    </a>
+                `;
+                
+                // Matikan Vue Dashboard agar tidak loading di background
+                throw new Error("Mode Viewer Aktif - Dashboard Berhenti");
+            }
         }
+
+        // Jalankan pengecekan saat halaman dibuka
+        checkViewerMode();
+
+        // Jalankan saat user menekan tombol Back/Forward di browser
+        window.addEventListener('hashchange', () => {
+            window.location.reload();
+        });
     </script>
 
     <!-- ========================================== -->
-    <!-- 2. DASHBOARD APLIKASI -->
+    <!-- 2. DASHBOARD APLIKASI (VUE JS) -->
     <!-- ========================================== -->
     <div id="app" v-cloak class="container mx-auto p-4 max-w-2xl pb-20">
         
@@ -268,7 +259,7 @@
     <script>
         const { createApp, ref, onMounted, computed } = Vue;
         
-        // KUNCI SUPABASE
+        // KUNCI SUPABASE (Jangan Lupa RLS di Supabase jika untuk Production)
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndtaGhyY2d2bmZqc2dlaWRleXV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUxMjgyOTEsImV4cCI6MjA4MDcwNDI5MX0.sCewtOfQWDNtWVjpn_aLxUcIWuaiwlSoeO07ORW5Znk';
         
         createApp({
@@ -334,7 +325,7 @@
                     if(file) selectedFileName.value = file.name;
                 };
 
-                // --- SISTEM DEPLOY (PERBAIKAN LOGIKA DISINI) ---
+                // --- SISTEM DEPLOY (LOGIKA AMAN TANPA KONFLIK DATABASE) ---
                 const deploy = async () => {
                     if(!projectName.value) return;
                     loading.value = true; statusMsg.value = 'Inisialisasi...';
@@ -343,20 +334,18 @@
                     const basePath = `${userId}/${projectName.value}`;
                     
                     try {
-                        // 1. RAW CODE
+                        // 1. UPLOAD FILE KE STORAGE
                         if(uploadType.value === 'code') {
                             const blob = new Blob([rawHtmlCode.value], { type: 'text/html' });
                             statusMsg.value = 'Mengupload kode...';
                             await uploadToSupabase(basePath, 'index.html', blob, 'text/html');
                         } 
-                        // 2. SINGLE HTML
                         else if(uploadType.value === 'single') {
                             const file = htmlInput.value.files[0];
                             if(!file) throw new Error("Pilih file HTML dulu");
                             statusMsg.value = 'Mengupload file...';
                             await uploadToSupabase(basePath, 'index.html', file, 'text/html');
                         } 
-                        // 3. ZIP FILE
                         else {
                             const file = zipInput.value.files[0];
                             if(!file) throw new Error("Pilih file ZIP dulu");
@@ -385,8 +374,7 @@
                             }
                         }
 
-                        // --- FIX: LOGIKA MANUAL CEK AGAR TIDAK ERROR CONSTRAINT ---
-                        // Cek apakah project dengan nama ini sudah ada milik user ini?
+                        // 2. SIMPAN/UPDATE DATABASE (MANUAL CHECK)
                         const { data: existing } = await sbClient
                             .from('deployments')
                             .select('id')
@@ -396,19 +384,18 @@
 
                         let dbError = null;
                         
-                        // Kalau ada -> UPDATE
                         if (existing) {
+                            // UPDATE jika sudah ada
                             const { error } = await sbClient
                                 .from('deployments')
                                 .update({ 
                                     public_url: `${basePath}/index.html`,
-                                    created_at: new Date().toISOString() // Update timestamp agar naik ke atas
+                                    created_at: new Date().toISOString()
                                 })
                                 .eq('id', existing.id);
                             dbError = error;
-                        } 
-                        // Kalau tidak ada -> INSERT
-                        else {
+                        } else {
+                            // INSERT jika baru
                             const { error } = await sbClient
                                 .from('deployments')
                                 .insert({
@@ -487,7 +474,7 @@
                     } catch(e) { alert('Gagal backup: ' + e.message); }
                 };
 
-                // --- UTILS ---
+                // --- GENERATE LINK VIEWER (GUNAKAN HASH #) ---
                 const getViewerLink = (siteName) => {
                     const currentHost = window.location.origin + window.location.pathname;
                     const path = `${user.value.id}/${siteName}/index.html`;
@@ -560,4 +547,4 @@
         }).mount('#app');
     </script>
 </body>
-    </html>
+</html>
