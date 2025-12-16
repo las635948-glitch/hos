@@ -17,7 +17,6 @@
         [v-cloak] { display: none !important; }
         body { background-color: #0f172a; color: #e2e8f0; font-family: 'Segoe UI', sans-serif; }
         
-        /* Style untuk Code Editor */
         textarea.code-editor {
             font-family: 'Courier New', Courier, monospace;
             white-space: pre;
@@ -29,7 +28,7 @@
 <body>
 
     <!-- ================================================================= -->
-    <!-- 1. VIEWER MODE (TEKNIK BLOB - SOLUSI TAMPILAN MENTAH) -->
+    <!-- 1. VIEWER MODE (DENGAN FIX QUERY PARAMETER & 404) -->
     <!-- ================================================================= -->
     <script>
         // KONFIGURASI SUPABASE
@@ -37,44 +36,67 @@
         const SB_BUCKET = 'hosting';
 
         async function checkViewerMode() {
-            // Cek apakah URL mengandung hash #/
             if (window.location.hash && window.location.hash.startsWith('#/')) {
-                // Tampilkan Loading Screen Dulu
+                // Tampilan Loading
                 document.body.innerHTML = `
                     <div style="height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;background:#0f172a;color:white;">
                         <i class="fa-solid fa-circle-notch fa-spin" style="font-size:3rem;color:#3b82f6;margin-bottom:20px;"></i>
-                        <h3 style="font-family:sans-serif;">Sedang Merender...</h3>
+                        <h3 style="font-family:sans-serif;">Memuat Halaman...</h3>
                     </div>`;
 
-                const path = window.location.hash.substring(2); 
-                const targetUrl = `${SB_URL}/storage/v1/object/public/${SB_BUCKET}/${path}`;
+                // --- LOGIKA PEMBERSIHAN URL ---
+                let rawHash = window.location.hash.substring(2); // Ambil setelah #/
+                let fetchPath = rawHash;
+                let queryParams = '';
+
+                // 1. Pisahkan ?page=view dari Path File agar Supabase tidak 404
+                if (rawHash.includes('?')) {
+                    const parts = rawHash.split('?');
+                    fetchPath = parts[0]; 
+                    queryParams = '?' + parts.slice(1).join('?'); // Simpan parameter untuk nanti
+                }
+
+                // 2. Auto-Detect index.html jika URL adalah folder
+                if (fetchPath.endsWith('/')) {
+                    fetchPath += 'index.html';
+                } else if (!fetchPath.includes('.')) {
+                    // Jika tidak ada titik (ekstensi), asumsikan folder
+                    fetchPath += '/index.html';
+                }
+
+                // URL Target ke Supabase
+                const targetUrl = `${SB_URL}/storage/v1/object/public/${SB_BUCKET}/${fetchPath}`;
                 const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
 
                 try {
-                    // 1. Fetch File Manual
+                    // Fetch File
                     const response = await fetch(targetUrl);
-                    if (!response.ok) throw new Error("File tidak ditemukan (404)");
+                    if (!response.ok) throw new Error(`File tidak ditemukan (404)`);
                     
                     const htmlContent = await response.text();
 
-                    // 2. Inject <base> tag agar CSS/Gambar terbaca dari Supabase
-                    // Ini penting karena kita akan merender via Blob (URL lokal)
+                    // --- INJECTION ---
                     let modifiedHtml = htmlContent;
+                    
+                    // 1. Inject <base> agar aset (css/img) terbaca
                     const baseTag = `<base href="${baseUrl}">`;
 
+                    // 2. Inject Query Params agar JS dalam web tetap bisa baca URL (window.location.search)
+                    // Kita manipulasi history state di dalam iframe
+                    const paramScript = queryParams ? 
+                        `<script>window.history.replaceState(null, '', '${queryParams}');<\/script>` : '';
+
                     if (modifiedHtml.includes('<head>')) {
-                        modifiedHtml = modifiedHtml.replace('<head>', `<head>${baseTag}`);
-                    } else if (modifiedHtml.includes('<html>')) {
-                        modifiedHtml = modifiedHtml.replace('<html>', `<html><head>${baseTag}</head>`);
+                        modifiedHtml = modifiedHtml.replace('<head>', `<head>${baseTag}${paramScript}`);
                     } else {
-                        modifiedHtml = `<head>${baseTag}</head>` + modifiedHtml;
+                        modifiedHtml = `<head>${baseTag}${paramScript}</head>` + modifiedHtml;
                     }
 
-                    // 3. Buat BLOB dengan tipe text/html (MEMAKSA BROWSER RENDER HTML)
+                    // Buat BLOB
                     const blob = new Blob([modifiedHtml], { type: 'text/html' });
                     const blobUrl = URL.createObjectURL(blob);
 
-                    // 4. Masukkan ke Iframe
+                    // Render Iframe
                     document.body.innerHTML = `
                         <style>
                             body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
@@ -98,16 +120,17 @@
                         </a>
                     `;
 
-                    // Stop Script Vue di bawah agar tidak konflik
                     throw new Error("Mode Viewer Aktif");
 
                 } catch (err) {
-                    if(err.message === "Mode Viewer Aktif") throw err; // Ignore intentional stop
+                    if(err.message === "Mode Viewer Aktif") throw err; 
                     
                     document.body.innerHTML = `
                         <div style="text-align:center;padding:50px;color:#ef4444;font-family:sans-serif;background:#1e293b;height:100vh;">
-                            <h2>Gagal Memuat Halaman</h2>
-                            <p>${err.message}</p>
+                            <i class="fa-solid fa-triangle-exclamation" style="font-size:3rem;margin-bottom:15px;"></i>
+                            <h2>Gagal Memuat</h2>
+                            <p style="opacity:0.7; margin-bottom: 20px;">${err.message}</p>
+                            <code style="background:#000;padding:5px 10px;border-radius:5px;display:block;margin:10px auto;max-width:500px;word-wrap:break-word;">Target: ${fetchPath}</code>
                             <a href="/" style="display:inline-block;margin-top:20px;color:#3b82f6;text-decoration:none;border:1px solid #3b82f6;padding:10px 20px;border-radius:5px;">Kembali</a>
                         </div>`;
                 }
@@ -357,7 +380,7 @@
                     if(file) selectedFileName.value = file.name;
                 };
 
-                // --- SISTEM DEPLOY (LOGIKA AMAN & CONTENT TYPE FIX) ---
+                // --- SISTEM DEPLOY ---
                 const deploy = async () => {
                     if(!projectName.value) return;
                     loading.value = true; statusMsg.value = 'Inisialisasi...';
@@ -406,7 +429,7 @@
                             }
                         }
 
-                        // 2. SIMPAN/UPDATE DATABASE (MANUAL CHECK)
+                        // 2. SIMPAN/UPDATE DATABASE
                         const { data: existing } = await sbClient
                             .from('deployments')
                             .select('id')
@@ -543,7 +566,6 @@
         headers: { "User-Agent": "MiniHost-Worker" }
       });
       
-      // FIX CONTENT-TYPE (Supabase kadang salah kirim)
       let newHeaders = new Headers(fetched.headers);
       if(path.endsWith('.html')) newHeaders.set("Content-Type", "text/html");
       if(path.endsWith('.css')) newHeaders.set("Content-Type", "text/css");
