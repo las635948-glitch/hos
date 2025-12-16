@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="id">
 <head>
@@ -32,14 +33,13 @@
 <body>
 
     <!-- ========================================== -->
-    <!-- 1. VIEWER MODE (LOGIKA HASH ROUTING) -->
+    <!-- 1. VIEWER MODE (DENGAN LOGIKA HASH /#/) -->
     <!-- ========================================== -->
     <script>
         // KONFIGURASI SUPABASE
         const SB_URL = 'https://wmhhrcgvnfjsgeideyut.supabase.co';
         const SB_BUCKET = 'hosting';
 
-        // --- PERUBAHAN DI SINI ---
         // Mendeteksi URL dengan format: domain.com/#/user/project/index.html
         let viewPath = null;
         if (window.location.hash && window.location.hash.startsWith('#/')) {
@@ -55,10 +55,8 @@
                     <h3>Memuat Website...</h3>
                 </div>`;
             
-            // Link File Asli: .../user/project/index.html
+            // Link File Asli
             const fullFileUrl = `${SB_URL}/storage/v1/object/public/${SB_BUCKET}/${viewPath}`;
-            
-            // Link Folder (Base): .../user/project/
             const baseUrl = fullFileUrl.substring(0, fullFileUrl.lastIndexOf('/') + 1);
 
             fetch(fullFileUrl)
@@ -67,7 +65,7 @@
                     return response.text();
                 })
                 .then(html => {
-                    // MAGIC TRICK: Inject <base> tag agar browser mencari aset di Supabase
+                    // Inject <base> tag agar aset relatif terbaca
                     let modifiedHtml = html;
                     const baseTag = `<base href="${baseUrl}">`;
 
@@ -79,7 +77,6 @@
                         modifiedHtml = `<head>${baseTag}</head>` + modifiedHtml;
                     }
 
-                    // Render HTML
                     document.open();
                     document.write(modifiedHtml);
                     document.close();
@@ -93,7 +90,6 @@
                         </div>`;
                 });
                 
-            // Matikan Dashboard Vue di bawah
             throw new Error("Mode Viewer Aktif - Stop Dashboard"); 
         }
     </script>
@@ -272,7 +268,7 @@
     <script>
         const { createApp, ref, onMounted, computed } = Vue;
         
-        // KUNCI SUPABASE ANDA
+        // KUNCI SUPABASE
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndtaGhyY2d2bmZqc2dlaWRleXV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUxMjgyOTEsImV4cCI6MjA4MDcwNDI5MX0.sCewtOfQWDNtWVjpn_aLxUcIWuaiwlSoeO07ORW5Znk';
         
         createApp({
@@ -338,7 +334,7 @@
                     if(file) selectedFileName.value = file.name;
                 };
 
-                // --- SISTEM DEPLOY ---
+                // --- SISTEM DEPLOY (PERBAIKAN LOGIKA DISINI) ---
                 const deploy = async () => {
                     if(!projectName.value) return;
                     loading.value = true; statusMsg.value = 'Inisialisasi...';
@@ -375,8 +371,6 @@
                             for(const f of fileNames) {
                                 if(!contents.files[f].dir) {
                                     const contentBlob = await contents.files[f].async('blob');
-                                    
-                                    // Deteksi MIME Type sederhana
                                     let mime = 'application/octet-stream';
                                     if(f.endsWith('.html')) mime = 'text/html';
                                     else if(f.endsWith('.css')) mime = 'text/css';
@@ -391,14 +385,41 @@
                             }
                         }
 
-                        // Simpan Data Project ke DB
-                        const { error } = await sbClient.from('deployments').upsert({
-                            user_id: userId, 
-                            site_name: projectName.value, 
-                            public_url: `${basePath}/index.html` 
-                        }, { onConflict: 'site_name, user_id' });
+                        // --- FIX: LOGIKA MANUAL CEK AGAR TIDAK ERROR CONSTRAINT ---
+                        // Cek apakah project dengan nama ini sudah ada milik user ini?
+                        const { data: existing } = await sbClient
+                            .from('deployments')
+                            .select('id')
+                            .eq('user_id', userId)
+                            .eq('site_name', projectName.value)
+                            .maybeSingle();
+
+                        let dbError = null;
                         
-                        if(error) throw error;
+                        // Kalau ada -> UPDATE
+                        if (existing) {
+                            const { error } = await sbClient
+                                .from('deployments')
+                                .update({ 
+                                    public_url: `${basePath}/index.html`,
+                                    created_at: new Date().toISOString() // Update timestamp agar naik ke atas
+                                })
+                                .eq('id', existing.id);
+                            dbError = error;
+                        } 
+                        // Kalau tidak ada -> INSERT
+                        else {
+                            const { error } = await sbClient
+                                .from('deployments')
+                                .insert({
+                                    user_id: userId,
+                                    site_name: projectName.value,
+                                    public_url: `${basePath}/index.html`
+                                });
+                            dbError = error;
+                        }
+                        
+                        if(dbError) throw dbError;
 
                         alert('✅ Deploy Berhasil!');
                         fetchDeployments();
@@ -467,7 +488,6 @@
                 };
 
                 // --- UTILS ---
-                // PERUBAHAN DI SINI: Generate link menggunakan #/
                 const getViewerLink = (siteName) => {
                     const currentHost = window.location.origin + window.location.pathname;
                     const path = `${user.value.id}/${siteName}/index.html`;
@@ -490,31 +510,15 @@
                     return `export default {
   async fetch(request) {
     const url = new URL(request.url);
-    
-    // --- 1. SETTING SUMBER FILE ---
-    // Link ini OTOMATIS mengarah ke Supabase Project: ${activeModalProject.value}
     const origin = "${activeOriginUrl.value}";
     
-    // --- 2. LOGIKA ROUTING (Canggih) ---
     let path = url.pathname;
-    
-    // A. Buka Domain Utama -> index.html
-    if (path === '/' || path === '') {
-      path = 'index.html';
-    } 
-    // B. Buka Folder (akhiran /) -> cari index.html
-    else if (path.endsWith('/')) {
-      path += 'index.html';
-    }
-    
-    // Bersihkan slash awal
-    if (path.startsWith('/')) {
-      path = path.substring(1);
-    }
+    if (path === '/' || path === '') path = 'index.html';
+    else if (path.endsWith('/')) path += 'index.html';
+    if (path.startsWith('/')) path = path.substring(1);
     
     const targetURL = origin + path + url.search;
     
-    // --- 3. AMBIL FILE & CACHE ---
     const cache = caches.default;
     let response = await cache.match(targetURL);
     
@@ -523,7 +527,6 @@
         headers: { "User-Agent": "MiniHost-Worker" }
       });
 
-      // OPTIONAL: Fallback SPA (jika 404, buka index.html)
       if(fetched.status === 404 && !path.includes('.')) {
           fetched = await fetch(origin + 'index.html');
       }
@@ -536,7 +539,6 @@
         try { cache.put(targetURL, response.clone()); } catch (e) {}
       }
     }
-    
     return response;
   }
 }`;
@@ -558,4 +560,4 @@
         }).mount('#app');
     </script>
 </body>
-</html>
+    </html>
