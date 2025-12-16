@@ -24,65 +24,98 @@
             overflow-wrap: normal;
             overflow-x: scroll;
         }
-        
-        .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
-        .fade-enter-from, .fade-leave-to { opacity: 0; }
     </style>
 </head>
 <body>
 
     <!-- ================================================================= -->
-    <!-- 1. VIEWER MODE (IFRAME FULLSCREEN - SOLUSI TERBAIK UNTUK HASH) -->
+    <!-- 1. VIEWER MODE (TEKNIK BLOB - SOLUSI TAMPILAN MENTAH) -->
     <!-- ================================================================= -->
     <script>
         // KONFIGURASI SUPABASE
         const SB_URL = 'https://wmhhrcgvnfjsgeideyut.supabase.co';
         const SB_BUCKET = 'hosting';
 
-        // Fungsi Cek Hash URL (Format: domain.com/#/user/project/index.html)
-        function checkViewerMode() {
+        async function checkViewerMode() {
+            // Cek apakah URL mengandung hash #/
             if (window.location.hash && window.location.hash.startsWith('#/')) {
-                const path = window.location.hash.substring(2); // Hapus karakter #/
-                
-                // Link Asli ke File Supabase (Agar CSS/JS/Gambar terbaca relatif terhadap ini)
-                const targetUrl = `${SB_URL}/storage/v1/object/public/${SB_BUCKET}/${path}`;
-
-                // Render Iframe Full Screen menimpa body
+                // Tampilkan Loading Screen Dulu
                 document.body.innerHTML = `
-                    <style>
-                        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
-                        #site-frame { width: 100vw; height: 100vh; border: none; display: block; }
-                        #back-btn {
-                            position: fixed; bottom: 20px; right: 20px;
-                            background: rgba(15, 23, 42, 0.9); color: white;
-                            padding: 10px 20px; border-radius: 50px;
-                            text-decoration: none; font-family: sans-serif;
-                            font-size: 14px; z-index: 9999; border: 1px solid #3b82f6;
-                            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
-                            transition: 0.3s; display: flex; align-items: center; gap: 8px;
-                        }
-                        #back-btn:hover { background: #2563eb; transform: scale(1.05); }
-                    </style>
+                    <div style="height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;background:#0f172a;color:white;">
+                        <i class="fa-solid fa-circle-notch fa-spin" style="font-size:3rem;color:#3b82f6;margin-bottom:20px;"></i>
+                        <h3 style="font-family:sans-serif;">Sedang Merender...</h3>
+                    </div>`;
+
+                const path = window.location.hash.substring(2); 
+                const targetUrl = `${SB_URL}/storage/v1/object/public/${SB_BUCKET}/${path}`;
+                const baseUrl = targetUrl.substring(0, targetUrl.lastIndexOf('/') + 1);
+
+                try {
+                    // 1. Fetch File Manual
+                    const response = await fetch(targetUrl);
+                    if (!response.ok) throw new Error("File tidak ditemukan (404)");
                     
-                    <iframe id="site-frame" src="${targetUrl}" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+                    const htmlContent = await response.text();
+
+                    // 2. Inject <base> tag agar CSS/Gambar terbaca dari Supabase
+                    // Ini penting karena kita akan merender via Blob (URL lokal)
+                    let modifiedHtml = htmlContent;
+                    const baseTag = `<base href="${baseUrl}">`;
+
+                    if (modifiedHtml.includes('<head>')) {
+                        modifiedHtml = modifiedHtml.replace('<head>', `<head>${baseTag}`);
+                    } else if (modifiedHtml.includes('<html>')) {
+                        modifiedHtml = modifiedHtml.replace('<html>', `<html><head>${baseTag}</head>`);
+                    } else {
+                        modifiedHtml = `<head>${baseTag}</head>` + modifiedHtml;
+                    }
+
+                    // 3. Buat BLOB dengan tipe text/html (MEMAKSA BROWSER RENDER HTML)
+                    const blob = new Blob([modifiedHtml], { type: 'text/html' });
+                    const blobUrl = URL.createObjectURL(blob);
+
+                    // 4. Masukkan ke Iframe
+                    document.body.innerHTML = `
+                        <style>
+                            body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
+                            #site-frame { width: 100vw; height: 100vh; border: none; display: block; }
+                            #back-btn {
+                                position: fixed; bottom: 20px; right: 20px;
+                                background: rgba(15, 23, 42, 0.9); color: white;
+                                padding: 10px 20px; border-radius: 50px;
+                                text-decoration: none; font-family: sans-serif;
+                                font-size: 14px; z-index: 9999; border: 1px solid #3b82f6;
+                                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+                                transition: 0.3s; display: flex; align-items: center; gap: 8px;
+                            }
+                            #back-btn:hover { background: #2563eb; transform: scale(1.05); }
+                        </style>
+                        
+                        <iframe id="site-frame" src="${blobUrl}" allowfullscreen></iframe>
+                        
+                        <a href="/" id="back-btn" onclick="window.location.hash=''; window.location.reload(); return false;">
+                            <i class="fa-solid fa-arrow-left"></i> Dashboard
+                        </a>
+                    `;
+
+                    // Stop Script Vue di bawah agar tidak konflik
+                    throw new Error("Mode Viewer Aktif");
+
+                } catch (err) {
+                    if(err.message === "Mode Viewer Aktif") throw err; // Ignore intentional stop
                     
-                    <a href="/" id="back-btn" onclick="window.location.hash=''; window.location.reload(); return false;">
-                        <i class="fa-solid fa-arrow-left"></i> Dashboard
-                    </a>
-                `;
-                
-                // Matikan Vue Dashboard agar tidak loading di background
-                throw new Error("Mode Viewer Aktif - Dashboard Berhenti");
+                    document.body.innerHTML = `
+                        <div style="text-align:center;padding:50px;color:#ef4444;font-family:sans-serif;background:#1e293b;height:100vh;">
+                            <h2>Gagal Memuat Halaman</h2>
+                            <p>${err.message}</p>
+                            <a href="/" style="display:inline-block;margin-top:20px;color:#3b82f6;text-decoration:none;border:1px solid #3b82f6;padding:10px 20px;border-radius:5px;">Kembali</a>
+                        </div>`;
+                }
             }
         }
 
-        // Jalankan pengecekan saat halaman dibuka
         checkViewerMode();
-
-        // Jalankan saat user menekan tombol Back/Forward di browser
-        window.addEventListener('hashchange', () => {
-            window.location.reload();
-        });
+        window.addEventListener('hashchange', () => window.location.reload());
     </script>
 
     <!-- ========================================== -->
@@ -259,7 +292,6 @@
     <script>
         const { createApp, ref, onMounted, computed } = Vue;
         
-        // KUNCI SUPABASE (Jangan Lupa RLS di Supabase jika untuk Production)
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndtaGhyY2d2bmZqc2dlaWRleXV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjUxMjgyOTEsImV4cCI6MjA4MDcwNDI5MX0.sCewtOfQWDNtWVjpn_aLxUcIWuaiwlSoeO07ORW5Znk';
         
         createApp({
@@ -325,7 +357,7 @@
                     if(file) selectedFileName.value = file.name;
                 };
 
-                // --- SISTEM DEPLOY (LOGIKA AMAN TANPA KONFLIK DATABASE) ---
+                // --- SISTEM DEPLOY (LOGIKA AMAN & CONTENT TYPE FIX) ---
                 const deploy = async () => {
                     if(!projectName.value) return;
                     loading.value = true; statusMsg.value = 'Inisialisasi...';
@@ -334,7 +366,7 @@
                     const basePath = `${userId}/${projectName.value}`;
                     
                     try {
-                        // 1. UPLOAD FILE KE STORAGE
+                        // 1. UPLOAD FILE
                         if(uploadType.value === 'code') {
                             const blob = new Blob([rawHtmlCode.value], { type: 'text/html' });
                             statusMsg.value = 'Mengupload kode...';
@@ -385,7 +417,6 @@
                         let dbError = null;
                         
                         if (existing) {
-                            // UPDATE jika sudah ada
                             const { error } = await sbClient
                                 .from('deployments')
                                 .update({ 
@@ -395,7 +426,6 @@
                                 .eq('id', existing.id);
                             dbError = error;
                         } else {
-                            // INSERT jika baru
                             const { error } = await sbClient
                                 .from('deployments')
                                 .insert({
@@ -474,7 +504,6 @@
                     } catch(e) { alert('Gagal backup: ' + e.message); }
                 };
 
-                // --- GENERATE LINK VIEWER (GUNAKAN HASH #) ---
                 const getViewerLink = (siteName) => {
                     const currentHost = window.location.origin + window.location.pathname;
                     const path = `${user.value.id}/${siteName}/index.html`;
@@ -513,12 +542,23 @@
       let fetched = await fetch(targetURL, {
         headers: { "User-Agent": "MiniHost-Worker" }
       });
+      
+      // FIX CONTENT-TYPE (Supabase kadang salah kirim)
+      let newHeaders = new Headers(fetched.headers);
+      if(path.endsWith('.html')) newHeaders.set("Content-Type", "text/html");
+      if(path.endsWith('.css')) newHeaders.set("Content-Type", "text/css");
+      if(path.endsWith('.js')) newHeaders.set("Content-Type", "application/javascript");
 
       if(fetched.status === 404 && !path.includes('.')) {
           fetched = await fetch(origin + 'index.html');
       }
 
-      response = new Response(fetched.body, fetched);
+      response = new Response(fetched.body, {
+        status: fetched.status,
+        statusText: fetched.statusText,
+        headers: newHeaders
+      });
+      
       response.headers.set("Access-Control-Allow-Origin", "*");
       response.headers.set("Cache-Control", "public, max-age=3600"); 
       
