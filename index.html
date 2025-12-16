@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MiniHost Pro - Sandbox Mode</title>
+    <title>MiniHost Pro - SPA Support</title>
     
     <!-- Library Penting -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -28,7 +28,7 @@
 <body>
 
     <!-- ================================================================= -->
-    <!-- 1. VIEWER MODE (SANDBOX ROOT FIX) -->
+    <!-- 1. VIEWER MODE (SPA / REACT / VUE SUPPORT) -->
     <!-- ================================================================= -->
     <script>
         // KONFIGURASI SUPABASE
@@ -38,126 +38,134 @@
         async function checkViewerMode() {
             if (window.location.hash && window.location.hash.startsWith('#/')) {
                 
-                // --- TAMPILAN LOADING ---
+                // --- LOADING UI ---
                 document.body.innerHTML = `
                     <div style="height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;background:#0f172a;color:white;">
-                        <i class="fa-solid fa-rocket fa-bounce" style="font-size:3rem;color:#f59e0b;margin-bottom:20px;"></i>
-                        <h3 style="font-family:sans-serif;">Memuat Sandbox...</h3>
-                        <p style="color:#64748b;font-size:0.8rem;margin-top:10px;">Mengatur Root Directory</p>
+                        <i class="fa-solid fa-atom fa-spin" style="font-size:3rem;color:#10b981;margin-bottom:20px;"></i>
+                        <h3 style="font-family:sans-serif;">Memuat Aplikasi SPA...</h3>
+                        <p style="color:#64748b;font-size:0.8rem;margin-top:10px;">Mengaktifkan Virtual Proxy</p>
                     </div>`;
 
-                // --- 1. PARSING URL YANG CERDAS ---
-                // Format: #/userid/projectname/path/file.html?query=123
-                let rawHash = window.location.hash.substring(2); // Hapus #/
-                
-                // Pisahkan Query Params (?page=...) dari Path File
+                // --- 1. PARSING URL ---
+                let rawHash = window.location.hash.substring(2);
                 let fetchPath = rawHash;
                 let queryParams = '';
                 
                 if (rawHash.includes('?')) {
                     const splitUrl = rawHash.split('?');
-                    fetchPath = splitUrl[0]; // Bagian file (misal: donghuatest/)
-                    queryParams = '?' + splitUrl.slice(1).join('?'); // Bagian query (misal: ?page=view)
+                    fetchPath = splitUrl[0];
+                    queryParams = '?' + splitUrl.slice(1).join('?');
                 }
 
-                // Auto-Index: Jika path berakhiran '/' atau kosong, cari index.html
                 if (fetchPath === '' || fetchPath.endsWith('/')) {
                     fetchPath += 'index.html';
                 } else if (!fetchPath.includes('.')) {
-                    // Jika tidak ada ekstensi file (misal: /login), anggap folder -> /login/index.html
                     fetchPath += '/index.html';
                 }
 
-                // --- 2. MENENTUKAN "ROOT" PROJECT ---
-                // URL File Asli di Supabase
                 const targetFileUrl = `${SB_URL}/storage/v1/object/public/${SB_BUCKET}/${fetchPath}`;
-                
-                // URL Folder Root (Agar aset relatif ./style.css jalan)
-                // Kita ambil path sampai slash terakhir.
                 const projectRootUrl = targetFileUrl.substring(0, targetFileUrl.lastIndexOf('/') + 1);
 
                 try {
-                    // Fetch File dari Supabase
                     const response = await fetch(targetFileUrl);
                     if (!response.ok) throw new Error(`File tidak ditemukan (404)`);
                     
-                    const htmlContent = await response.text();
+                    let htmlContent = await response.text();
 
-                    // --- 3. INJECTION (SANDBOX MAGIC) ---
-                    let modifiedHtml = htmlContent;
+                    // --- 2. HTML REWRITER (Ganti Absolute Path ke Full URL) ---
+                    // Ini memperbaiki <script src="/assets/index.js"> menjadi <script src="https://supabase.../assets/index.js">
+                    // Regex ini mencari src="/..." dan href="/..." lalu menggantinya
+                    htmlContent = htmlContent.replace(/(src|href)=["']\/([^"']+)["']/g, `$1="${projectRootUrl}$2"`);
 
-                    // A. Inject <base> Tag
-                    // Ini kuncinya! Membuat folder project menjadi "Root" bagi browser.
-                    const baseTag = `<base href="${projectRootUrl}">`;
-
-                    // B. Inject Script Manipulasi URL
-                    // Agar script di dalam web kamu (seperti PHP $_GET versi JS) bisa baca parameter ?page=view
-                    const sandboxScript = `
+                    // --- 3. INJECT SCRIPT "MONKEY PATCH" ---
+                    // Script ini akan berjalan DI DALAM web kamu untuk membelokkan request
+                    const proxyScript = `
                         <script>
-                            // Memaksa browser merasa memiliki Query Params yang benar
+                            window.__SPA_ROOT = '${projectRootUrl}';
+                            
+                            console.log('[MiniHost] Virtual Proxy Activated');
+
+                            // 1. Intercept Fetch API (Untuk React/Vue modern)
+                            const originalFetch = window.fetch;
+                            window.fetch = async function(url, options) {
+                                if (typeof url === 'string') {
+                                    // Jika request diawali '/', ganti dengan root supabase
+                                    if (url.startsWith('/')) {
+                                        url = window.__SPA_ROOT + url.substring(1);
+                                    } 
+                                    // Jika request relative './', biarkan browser handle (karena ada base tag)
+                                }
+                                return originalFetch(url, options);
+                            };
+
+                            // 2. Intercept XHR (Untuk Axios / Library lama)
+                            const originalOpen = XMLHttpRequest.prototype.open;
+                            XMLHttpRequest.prototype.open = function(method, url, ...args) {
+                                if (typeof url === 'string' && url.startsWith('/')) {
+                                    url = window.__SPA_ROOT + url.substring(1);
+                                }
+                                return originalOpen.apply(this, [method, url, ...args]);
+                            };
+
+                            // 3. Inject Query Params Awal
                             if ('${queryParams}' !== '') {
-                                window.history.replaceState(null, '', '${queryParams}');
+                                try { window.history.replaceState(null, '', '${queryParams}'); } catch(e){}
                             }
-                            // Mencegah link keluar dari iframe jika memungkinkan
-                            console.log('Sandbox Active. Root:', '${projectRootUrl}');
+
+                            // 4. Error Handler untuk Gambar
+                            window.addEventListener('error', function(e) {
+                                if(e.target.tagName === 'IMG' && e.target.getAttribute('src').startsWith('/')) {
+                                    e.target.src = window.__SPA_ROOT + e.target.getAttribute('src').substring(1);
+                                }
+                            }, true);
+
                         <\/script>
                     `;
 
-                    // Masukkan ke dalam <head>
-                    if (modifiedHtml.includes('<head>')) {
-                        modifiedHtml = modifiedHtml.replace('<head>', `<head>${baseTag}${sandboxScript}`);
-                    } else if (modifiedHtml.includes('<html>')) {
-                        modifiedHtml = modifiedHtml.replace('<html>', `<html><head>${baseTag}${sandboxScript}</head>`);
+                    // --- 4. RAKIT HTML FINAL ---
+                    const baseTag = `<base href="${projectRootUrl}">`;
+                    
+                    // Inject di head
+                    if (htmlContent.includes('<head>')) {
+                        htmlContent = htmlContent.replace('<head>', `<head>${baseTag}${proxyScript}`);
                     } else {
-                        modifiedHtml = `<head>${baseTag}${sandboxScript}</head>` + modifiedHtml;
+                        htmlContent = `<head>${baseTag}${proxyScript}</head>` + htmlContent;
                     }
 
-                    // --- 4. RENDER KE BLOB (VIRTUAL FILE) ---
-                    const blob = new Blob([modifiedHtml], { type: 'text/html' });
+                    // --- 5. RENDER KE BLOB ---
+                    const blob = new Blob([htmlContent], { type: 'text/html' });
                     const blobUrl = URL.createObjectURL(blob);
 
-                    // Render Iframe
                     document.body.innerHTML = `
                         <style>
                             body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
-                            #site-frame { width: 100vw; height: 100vh; border: none; display: block; }
-                            
-                            /* Tombol Overlay */
-                            .overlay-btn {
+                            iframe { width: 100vw; height: 100vh; border: none; display: block; }
+                            .float-btn {
                                 position: fixed; bottom: 20px; right: 20px;
-                                background: rgba(15, 23, 42, 0.8); color: white;
-                                padding: 8px 16px; border-radius: 50px;
-                                text-decoration: none; font-family: sans-serif;
-                                font-size: 12px; z-index: 9999; border: 1px solid #334155;
-                                backdrop-filter: blur(4px); transition: 0.2s;
+                                background: rgba(0,0,0,0.8); color: white;
+                                padding: 8px 15px; border-radius: 50px;
+                                font-family: sans-serif; font-size: 12px;
+                                text-decoration: none; border: 1px solid #333;
+                                z-index: 9999;
                             }
-                            .overlay-btn:hover { background: #2563eb; transform: translateY(-2px); }
                         </style>
-                        
-                        <iframe id="site-frame" src="${blobUrl}" allowfullscreen></iframe>
-                        
-                        <a href="/" class="overlay-btn" onclick="window.location.hash=''; window.location.reload(); return false;">
-                            <i class="fa-solid fa-code"></i> Dashboard
+                        <iframe src="${blobUrl}" allowfullscreen></iframe>
+                        <a href="/" class="float-btn" onclick="window.location.hash='';window.location.reload();return false;">
+                            <i class="fa-solid fa-arrow-left"></i> Dashboard
                         </a>
                     `;
 
-                    // Matikan Vue Dashboard
                     throw new Error("Mode Viewer Aktif");
 
                 } catch (err) {
                     if(err.message === "Mode Viewer Aktif") throw err; 
                     
                     document.body.innerHTML = `
-                        <div style="text-align:center;padding:40px;color:#ef4444;font-family:sans-serif;background:#1e293b;height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;">
-                            <div style="background:rgba(239,68,68,0.1);padding:20px;border-radius:100%;margin-bottom:20px;">
-                                <i class="fa-solid fa-triangle-exclamation" style="font-size:2rem;"></i>
-                            </div>
-                            <h2 style="font-size:1.5rem;margin-bottom:10px;color:white;">Gagal Memuat File</h2>
-                            <p style="color:#94a3b8;max-width:400px;line-height:1.5;">${err.message}</p>
-                            <div style="background:#0f172a;padding:10px;border-radius:5px;margin-top:20px;font-family:monospace;font-size:0.8rem;color:#64748b;border:1px solid #334155;">
-                                Target: ${fetchPath}
-                            </div>
-                            <a href="/" style="margin-top:30px;color:#3b82f6;text-decoration:none;border-bottom:1px dashed #3b82f6;">Kembali ke Dashboard</a>
+                        <div style="text-align:center;padding:50px;color:#ef4444;background:#1e293b;height:100vh;font-family:sans-serif;">
+                            <h2 style="font-size:2rem;">Gagal Memuat</h2>
+                            <p>${err.message}</p>
+                            <br>
+                            <a href="/" style="color:#3b82f6;">Kembali ke Dashboard</a>
                         </div>`;
                 }
             }
